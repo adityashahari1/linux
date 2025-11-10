@@ -72,6 +72,25 @@ MODULE_DEVICE_TABLE(x86cpu, svm_cpu_id);
 
 static bool erratum_383_found __read_mostly;
 
+
+/* CMPE283 instrumentation (SVM) */
+static unsigned long cmpe283_exit_count[1024];
+static unsigned long cmpe283_total_exits;
+static const char *cmpe283_exit_reason_str[1024] = {
+    [0x072] = "CPUID",
+    [0x078] = "HLT",
+    [0x07B] = "IOIO",
+    [0x07C] = "MSR Read/Write",
+    [0x040] = "NMI",
+    [0x041] = "SMI",
+    [0x060] = "PF Vector",
+    [0x400] = "Nested Page Fault",
+};
+/* end CMPE283 instrumentation */
+
+static uint64_t osvw_len = 4, osvw_status;
+
+
 /*
  * Set osvw_len to higher value when updated Revision Guides
  * are published and we know what the new status bits are
@@ -3517,6 +3536,29 @@ static int svm_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
 	struct vcpu_svm *svm = to_svm(vcpu);
 	struct kvm_run *kvm_run = vcpu->run;
 	u32 exit_code = svm->vmcb->control.exit_code;
+
+
+/* CMPE283: count exit reason */
+    	u32 __cmpe283_reason = to_svm(vcpu)->vmcb->control.exit_code;
+    	if (__cmpe283_reason < 1024)
+        	cmpe283_exit_count[__cmpe283_reason]++;
+    	else
+        	cmpe283_exit_count[0]++; /* bucket overflow, very rare */
+
+    	cmpe283_total_exits++;
+
+    	if ((cmpe283_total_exits % 10000UL) == 0) {
+        	int i;
+        	printk(KERN_INFO "CMPE283(SVM): KVM Exit Stats (total=%lu)\n", cmpe283_total_exits);
+        	for (i = 0; i < 1024; i++) {
+            		if (cmpe283_exit_count[i])
+                		printk(KERN_INFO "  Exit 0x%03x (%s): %lu\n",
+                       		i,
+                       		cmpe283_exit_reason_str[i] ? cmpe283_exit_reason_str[i] : "Unknown",
+                       		cmpe283_exit_count[i]);
+        	}
+    	}
+
 
 	/* SEV-ES guests must use the CR write traps to track CR registers. */
 	if (!sev_es_guest(vcpu->kvm)) {
